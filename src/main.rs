@@ -1,70 +1,102 @@
 #![no_std]
 #![no_main]
 
-use bsp::entry;
-use rp_pico as bsp;
+use rp_pico;
+use rp_pico::{
+    hal,
+    entry,
+    Pins,
+};
+
+use hal::{
+    gpio,
+    i2c::I2C,
+    clocks,
+    pac,
+    sio::Sio,
+    watchdog::Watchdog,
+    usb::UsbBus,
+};
+
+use pac::{
+    Peripherals,
+    CorePeripherals
+};
+
+use usbd_serial::SerialPort;
+
+use ssd1306::{
+    prelude::*,
+    I2CDisplayInterface,
+    Ssd1306
+};
+
+use usb_device::bus::UsbBusAllocator;
+use usb_device::device::UsbDeviceBuilder;
+use usb_device::device::UsbVidPid;
+
 use fugit::RateExtU32;
 use embedded_hal::digital::v2::OutputPin;
 
 use core::fmt::Write;
 use core::panic::PanicInfo;
 
-use bsp::hal::i2c::I2C;
-
-use bsp::hal::{
-    clocks::init_clocks_and_plls,
-    pac,
-    sio::Sio,
-    watchdog::Watchdog,
-};
-
-//use embedded_graphics::{
-//    mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder},
-//    pixelcolor::BinaryColor,
-//    prelude::*,
-//    text::{Baseline, Text},
-//};
-
-use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
-
-
 #[entry]
 fn main() -> ! {
-    let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
+    let mut peripherals = Peripherals::take().unwrap();
+    let core = CorePeripherals::take().unwrap();
+    let mut watchdog = Watchdog::new(peripherals.WATCHDOG);
+    let sio = Sio::new(peripherals.SIO);
 
     let external_xtal_freq_hz = 12_000_000u32;
     
-    let clocks = init_clocks_and_plls(
+    let clocks = clocks::init_clocks_and_plls(
         external_xtal_freq_hz,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
+        peripherals.XOSC,
+        peripherals.CLOCKS,
+        peripherals.PLL_SYS,
+        peripherals.PLL_USB,
+        &mut peripherals.RESETS,
         &mut watchdog,
     )
     .ok()
     .unwrap();
 
-    let pins = bsp::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
+    let usb = UsbBus::new(
+        peripherals.USBCTRL_REGS,
+        peripherals.USBCTRL_DPRAM,
+        clocks.usb_clock,
+        true,
+        &mut peripherals.RESETS,
     );
 
-    let sda_pin = pins.gpio14.into_function::<bsp::hal::gpio::FunctionI2C>();
-    let scl_pin = pins.gpio15.into_function::<bsp::hal::gpio::FunctionI2C>();
+    let usb_bus = UsbBusAllocator::new(usb);
+
+    let mut serial = SerialPort::new(&usb_bus);
+
+    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x0330, 0x1D1D))
+                                            .manufacturer("side-7")
+                                            .product("Serial Port")
+                                            .serial_number("1234567")
+                                            .device_class(2)
+                                            .build();
+
+    let pins = Pins::new(
+         peripherals.IO_BANK0,
+         peripherals.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut peripherals.RESETS,
+    );
+
+    let sda_pin = pins.gpio14.into_function::<gpio::FunctionI2C>();
+    let scl_pin = pins.gpio15.into_function::<gpio::FunctionI2C>();
 
     let i2c = I2C::i2c1(
-        pac.I2C1,
+        peripherals.I2C1,
         sda_pin,
         scl_pin,
         100.kHz(),
-        &mut pac.RESETS,
+        &mut peripherals.RESETS,
         125_000_000.Hz(),
     );
 
@@ -73,7 +105,7 @@ fn main() -> ! {
         interface,
         DisplaySize128x32,
         DisplayRotation::Rotate0,
-    ).into_terminal_mode(); //into_buffered_graphics_mode();
+    ).into_terminal_mode();
 
     display.init().unwrap();
 
@@ -88,8 +120,7 @@ fn main() -> ! {
         led_pin.set_high().unwrap();
         delay.delay_ms(500);
 
-//        let _ = display.write_str("blarb"); 
-        let _ = display.write_fmt(format_args!("{:?}", x));
+        let _ = display.write_fmt(format_args!("{:?} ", x));
 
         led_pin.set_low().unwrap();
         delay.delay_ms(500);
